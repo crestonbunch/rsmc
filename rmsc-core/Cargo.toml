@@ -1,0 +1,15 @@
+[package]
+name = "rmsc-core"
+version = "0.1.0"
+authors = ["Creston Bunch <rust@bunch.im>"]
+edition = "2018"
+
+[dependencies]
+async-trait = "0.1"
+deadpool = "0.7.0"
+futures = "0.3"
+futures-util = "0.3"
+murmur3 = "0.5"
+
+[dev-dependencies]
+tokio-test = "0.4"

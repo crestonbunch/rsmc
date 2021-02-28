@@ -1,0 +1,9 @@
+[package]
+name = "rmsc-async-std"
+version = "0.1.0"
+authors = ["Creston Bunch <rust@bunch.im>"]
+edition = "2018"
+
+[dependencies]
+async-std = "1.9"
+rmsc-core = { path = "../rmsc-core" }

@@ -1,0 +1,14 @@
+[package]
+name = "rmsc-tokio"
+version = "0.1.0"
+authors = ["Creston Bunch <rust@bunch.im>"]
+edition = "2018"
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1.2", features = ["full"] }
+rmsc-core = { path = "../rmsc-core" }
+
+[dev-dependencies]
+tokio-test = "0.4"

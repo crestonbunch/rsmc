@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "rmsc-async-std",
+    "rmsc-core",
+    "rmsc-tokio",
+]
