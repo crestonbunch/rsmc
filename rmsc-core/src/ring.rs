@@ -1,4 +1,3 @@
-use futures::{stream::FuturesOrdered, StreamExt};
 use murmur3::murmur3_32;
 
 use crate::client::{Connection, Error};
@@ -11,7 +10,7 @@ const DEFAULT_SIZE: usize = 360;
 /// be reshuffled.
 #[derive(Debug, Clone)]
 pub struct Ring<C: Connection> {
-    pub conns: Vec<C>,
+    conns: Vec<C>,
     buckets: Vec<(u32, usize)>,
 }
 
@@ -43,15 +42,38 @@ impl<C: Connection> Ring<C> {
 
     /// Get the connection owning the bucket containing the given key.
     pub fn get_conn(&mut self, key: &[u8]) -> Result<&mut C, Error> {
+        let conn_index = self.find_bucket(key);
+        Ok(&mut self.conns[conn_index])
+    }
+
+    /// Group multiple keys and the connections that own the keys.
+    pub fn get_conns<'a, 'b>(&'b mut self, keys: Vec<&'a [u8]>) -> Vec<(&'b mut C, Vec<&'a [u8]>)> {
+        let pipelines = self.get_pipelines(keys);
+        self.into_iter()
+            .zip(pipelines)
+            .filter(|(_, pipeline)| !pipeline.is_empty())
+            .collect()
+    }
+
+    fn get_pipelines<'a>(&self, keys: Vec<&'a [u8]>) -> Vec<Vec<&'a [u8]>> {
+        let mut out = vec![vec![]; self.conns.len()];
+        for key in keys {
+            let conn_index = self.find_bucket(key);
+            out[conn_index].push(key);
+        }
+        out
+    }
+
+    fn find_bucket(&self, key: &[u8]) -> usize {
         let mut key = &key[..];
         // Find the position of the hash on the ring
-        let ring_pos = murmur3_32(&mut key, 0)?;
+        let ring_pos = murmur3_32(&mut key, 0).unwrap();
         // Find the bucket containing the ring position
         let bucket_search = self.buckets.binary_search_by_key(&ring_pos, |(i, _)| *i);
         let bucket_index = bucket_search.unwrap_or_else(|next_bucket| next_bucket);
         // Return the connection owning that bucket
         let (_, conn_index) = self.buckets.get(bucket_index).unwrap_or(&self.buckets[0]);
-        Ok(&mut self.conns[*conn_index])
+        *conn_index
     }
 }
 
@@ -105,5 +127,14 @@ mod tests {
             assert_eq!(vec![(748582396, 1), (1636863978, 0)], ring.buckets);
             assert_eq!("localhost:11212", ring.get_conn(b"q").unwrap().url);
         });
+    }
+}
+
+impl<'a, C: Connection> IntoIterator for &'a mut Ring<C> {
+    type Item = &'a mut C;
+    type IntoIter = std::slice::IterMut<'a, C>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.conns[..].iter_mut()
     }
 }

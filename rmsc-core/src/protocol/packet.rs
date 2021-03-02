@@ -1,6 +1,10 @@
 use std::convert::{TryFrom, TryInto};
 
-use super::ProtocolError;
+use super::{
+    ProtocolError, Status, ADDQ_OPCODE, ADD_OPCODE, GETKQ_OPCODE, GETK_OPCODE, GET_OPCODE,
+    MAGIC_REQUEST_VALUE, MAGIC_RESPONSE_VALUE, NOOP_OPCODE, REPLACEQ_OPCODE, REPLACE_OPCODE,
+    SETQ_OPCODE, SET_OPCODE,
+};
 
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub struct Header {
@@ -15,17 +19,35 @@ pub struct Header {
     pub cas: u64,
 }
 
-impl TryFrom<&[u8]> for Header {
-    type Error = ProtocolError;
+impl Header {
+    pub fn read_packet(self, body: &[u8]) -> Result<Packet, ProtocolError> {
+        if body.len() != self.body_len as usize {
+            // The body length does not match the header
+            return Err(ProtocolError::BodySizeMismatch);
+        }
 
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        let (extras, body) = body.split_at(self.extras_length as usize);
+        let (key, value) = body.split_at(self.key_length as usize);
+
+        Ok(Packet {
+            header: self,
+            extras: extras.into(),
+            key: key.into(),
+            value: value.into(),
+        })
+    }
+
+    pub fn read_response(bytes: &[u8]) -> Result<Self, ProtocolError> {
         if bytes.len() < 24 {
             // The header must be 24 bytes
             return Err(ProtocolError::PacketTooSmall);
         }
-
+        let magic = u8::from_be_bytes(bytes[0..1].try_into().unwrap());
+        if magic != MAGIC_RESPONSE_VALUE {
+            return Err(ProtocolError::InvalidMagic(magic));
+        }
         Ok(Header {
-            magic: u8::from_be_bytes(bytes[0..1].try_into().unwrap()),
+            magic,
             opcode: u8::from_be_bytes(bytes[1..2].try_into().unwrap()),
             key_length: u16::from_be_bytes(bytes[2..4].try_into().unwrap()),
             extras_length: u8::from_be_bytes(bytes[4..5].try_into().unwrap()),
@@ -47,21 +69,70 @@ pub struct Packet {
 }
 
 impl Packet {
-    pub fn new(header: Header, body: &[u8]) -> Result<Self, ProtocolError> {
-        if body.len() != header.body_len as usize {
-            // The body length does not match the header
-            return Err(ProtocolError::BodySizeMismatch);
+    fn new_request(opcode: u8, key: Vec<u8>, extras: Vec<u8>, value: Vec<u8>) -> Self {
+        let mut packet = Packet::default();
+        packet.header.magic = MAGIC_REQUEST_VALUE;
+        packet.header.opcode = opcode;
+        packet.header.key_length = key.len() as u16;
+        packet.header.extras_length = extras.len() as u8;
+        packet.header.body_len = (extras.len() + key.len() + value.len()) as u32;
+        packet.key = key;
+        packet.extras = extras;
+        packet.value = value;
+        packet
+    }
+
+    pub fn get(key: Vec<u8>) -> Self {
+        Packet::new_request(GET_OPCODE, key, vec![], vec![])
+    }
+
+    pub fn getk(key: Vec<u8>) -> Self {
+        Packet::new_request(GETK_OPCODE, key, vec![], vec![])
+    }
+
+    pub fn getkq(key: Vec<u8>) -> Self {
+        Packet::new_request(GETKQ_OPCODE, key, vec![], vec![])
+    }
+
+    pub fn set(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
+        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
+        Packet::new_request(SET_OPCODE, key, extras, value)
+    }
+
+    pub fn setq(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
+        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
+        Packet::new_request(SETQ_OPCODE, key, extras, value)
+    }
+
+    pub fn add(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
+        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
+        Packet::new_request(ADD_OPCODE, key, extras, value)
+    }
+
+    pub fn addq(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
+        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
+        Packet::new_request(ADDQ_OPCODE, key, extras, value)
+    }
+
+    pub fn replace(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
+        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
+        Packet::new_request(REPLACE_OPCODE, key, extras, value)
+    }
+
+    pub fn replaceq(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
+        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
+        Packet::new_request(REPLACEQ_OPCODE, key, extras, value)
+    }
+
+    pub fn noop() -> Self {
+        Packet::new_request(NOOP_OPCODE, vec![], vec![], vec![])
+    }
+
+    pub fn error_for_status(&self) -> Result<(), Status> {
+        match self.header.vbucket_or_status {
+            0 => Ok(()),
+            it => Err(Status::from(it)),
         }
-
-        let (extras, body) = body.split_at(header.extras_length as usize);
-        let (key, value) = body.split_at(header.key_length as usize);
-
-        Ok(Packet {
-            header,
-            extras: extras.into(),
-            key: key.into(),
-            value: value.into(),
-        })
     }
 }
 
@@ -118,7 +189,7 @@ mod tests {
         let packet_bytes: Vec<u8> = expect_packet.clone().into();
         assert_eq!(expect_bytes, packet_bytes);
 
-        let actual_packet: Packet = Packet::new(header, b"Hello").unwrap();
+        let actual_packet: Packet = header.read_packet(b"Hello").unwrap();
         assert_eq!(expect_packet, actual_packet);
     }
 }

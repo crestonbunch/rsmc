@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Status {
     UnknownStatus,
     NoError,
@@ -43,13 +43,9 @@ impl From<u16> for Status {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ProtocolError {
     InvalidMagic(u8),
-    InvalidOpCode(u8),
-    InvalidUtf8(Vec<u8>),
     PacketTooSmall,
     BodySizeMismatch,
-    OpCodeMismatch,
-    NonZeroStatus(Status),
 }

@@ -1,12 +1,8 @@
 mod error;
 mod packet;
-mod request;
-mod response;
 
 pub use error::{ProtocolError, Status};
 pub(crate) use packet::{Header, Packet};
-pub(crate) use request::{GetRequest, NoopRequest, Request, SetRequest};
-pub(crate) use response::{GetResponse, NoopResponse, Response, SetResponse};
 
 const MAGIC_REQUEST_VALUE: u8 = 0x80;
 const MAGIC_RESPONSE_VALUE: u8 = 0x81;
