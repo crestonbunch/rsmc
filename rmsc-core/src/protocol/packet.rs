@@ -1,9 +1,9 @@
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 
 use super::{
-    ProtocolError, Status, ADDQ_OPCODE, ADD_OPCODE, GETKQ_OPCODE, GETK_OPCODE, GET_OPCODE,
-    MAGIC_REQUEST_VALUE, MAGIC_RESPONSE_VALUE, NOOP_OPCODE, REPLACEQ_OPCODE, REPLACE_OPCODE,
-    SETQ_OPCODE, SET_OPCODE,
+    ProtocolError, Status, ADDQ_OPCODE, ADD_OPCODE, DELETE_OPCODE, GETKQ_OPCODE, GETK_OPCODE,
+    GETQ_OPCODE, GET_OPCODE, MAGIC_REQUEST_VALUE, MAGIC_RESPONSE_VALUE, NOOP_OPCODE,
+    REPLACEQ_OPCODE, REPLACE_OPCODE, SETQ_OPCODE, SET_OPCODE, VERSION_OPCODE,
 };
 
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -90,6 +90,10 @@ impl Packet {
         Packet::new_request(GETK_OPCODE, key, vec![], vec![])
     }
 
+    pub fn getq(key: Vec<u8>) -> Self {
+        Packet::new_request(GETQ_OPCODE, key, vec![], vec![])
+    }
+
     pub fn getkq(key: Vec<u8>) -> Self {
         Packet::new_request(GETKQ_OPCODE, key, vec![], vec![])
     }
@@ -124,8 +128,16 @@ impl Packet {
         Packet::new_request(REPLACEQ_OPCODE, key, extras, value)
     }
 
+    pub fn delete(key: Vec<u8>) -> Self {
+        Packet::new_request(DELETE_OPCODE, key, vec![], vec![])
+    }
+
     pub fn noop() -> Self {
         Packet::new_request(NOOP_OPCODE, vec![], vec![], vec![])
+    }
+
+    pub fn version() -> Self {
+        Packet::new_request(VERSION_OPCODE, vec![], vec![], vec![])
     }
 
     pub fn error_for_status(&self) -> Result<(), Status> {

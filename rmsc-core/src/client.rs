@@ -11,6 +11,7 @@ pub enum Error {
     IoError(std::io::Error),
     Protocol(ProtocolError),
     Status(Status),
+    MultiError(HashMap<Vec<u8>, Error>),
 }
 
 impl From<std::io::Error> for Error {
@@ -95,8 +96,9 @@ impl<C: Connection> Client<C> {
     pub async fn get_multi<'a>(
         &mut self,
         keys: Vec<&[u8]>,
-    ) -> Result<HashMap<Vec<u8>, Result<Vec<u8>, Error>>, Error> {
-        let mut out = HashMap::new();
+    ) -> Result<HashMap<Vec<u8>, Vec<u8>>, Error> {
+        let mut values = HashMap::new();
+        let mut errors = HashMap::new();
 
         // TODO: parallelize
         for (conn, mut pipeline) in self.ring.get_conns(keys.clone()) {
@@ -108,8 +110,9 @@ impl<C: Connection> Client<C> {
 
             for packet in reqs {
                 let key = packet.key.clone();
-                if let Err(err) = conn.write_packet(packet).await {
-                    out.insert(key, Err(err));
+                let result = conn.write_packet(packet).await;
+                if let Err(err) = result {
+                    errors.insert(key, err);
                 }
             }
         }
@@ -117,22 +120,28 @@ impl<C: Connection> Client<C> {
         // TODO: parallelize
         for (conn, mut pipeline) in self.ring.get_conns(keys.clone()) {
             let last_key = pipeline.pop().unwrap();
-            let mut errs: Vec<Result<(), Error>> = vec![];
             let mut finished = false;
             while !finished {
                 let packet = conn.read_packet().await?;
                 let key = packet.key.clone();
                 finished = packet.key == last_key;
                 match packet.error_for_status() {
-                    Ok(()) => {
-                        out.insert(key, Ok(packet.value));
-                    }
                     Err(Status::KeyNotFound) => (),
-                    Err(err) => errs.push(Err(Error::Status(err))),
+                    Err(err) => {
+                        errors.insert(key, Error::Status(err));
+                    }
+                    Ok(()) => {
+                        values.insert(key, packet.value);
+                    }
                 }
             }
         }
-        Ok(out)
+
+        if errors.is_empty() {
+            Ok(values)
+        } else {
+            Err(Error::MultiError(errors))
+        }
     }
 
     pub async fn set(&mut self, key: &[u8], data: &[u8], expire: u32) -> Result<(), Error> {
@@ -147,8 +156,9 @@ impl<C: Connection> Client<C> {
         &mut self,
         mut data: HashMap<Vec<u8>, Vec<u8>>,
         expire: u32,
-    ) -> Result<HashMap<Vec<u8>, Result<(), Error>>, Error> {
-        let mut out = HashMap::new();
+    ) -> Result<(), Error> {
+        let mut errors = HashMap::new();
+
         let keys = data.keys().map(|k| k.clone()).collect::<Vec<_>>();
         let keys = keys.iter().map(|k| &k[..]).collect::<Vec<_>>();
 
@@ -165,42 +175,83 @@ impl<C: Connection> Client<C> {
             for packet in reqs {
                 let key = packet.key.clone();
                 if let Err(err) = conn.write_packet(packet).await {
-                    out.insert(key, Err(err));
+                    errors.insert(key, err);
                 }
             }
         }
 
         // TODO: parallelize
         for (conn, _) in self.ring.get_conns(keys.clone()) {
-            let mut errs: Vec<Result<(), Error>> = vec![];
             let mut finished = false;
             while !finished {
                 let packet = conn.read_packet().await?;
+                let key = packet.key.clone();
                 finished = packet.header.vbucket_or_status == 0;
                 match packet.error_for_status() {
                     Ok(()) => (),
                     Err(Status::KeyNotFound) => (),
-                    Err(err) => errs.push(Err(Error::Status(err))),
+                    Err(err) => {
+                        errors.insert(key, Error::Status(err));
+                    }
                 }
             }
         }
 
-        Ok(out)
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::MultiError(errors))
+        }
     }
 
-    pub async fn delete(&self, key: &[u8]) -> Result<(), Error> {
-        unimplemented!()
+    pub async fn delete(&mut self, key: &[u8]) -> Result<(), Error> {
+        let conn = self.ring.get_conn(key)?;
+        conn.write_packet(Packet::delete(key.into())).await?;
+        conn.read_packet().await?;
+        Ok(())
     }
 
-    pub async fn delete_multi(&self, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>, Error> {
-        unimplemented!()
+    pub async fn delete_multi(&mut self, keys: Vec<&[u8]>) -> Result<(), Error> {
+        let mut errors = HashMap::new();
+
+        // TODO: parallelize
+        for (conn, pipeline) in self.ring.get_conns(keys.clone()) {
+            let reqs = pipeline.into_iter().map(|key| Packet::delete(key.into()));
+            for packet in reqs {
+                let key = packet.key.clone();
+                if let Err(err) = conn.write_packet(packet).await {
+                    errors.insert(key, err);
+                }
+            }
+        }
+
+        // TODO: parallelize
+        for (conn, pipeline) in self.ring.get_conns(keys.clone()) {
+            for _ in pipeline {
+                let packet = conn.read_packet().await?;
+                let key = packet.key.clone();
+                match packet.error_for_status() {
+                    Ok(()) => (),
+                    Err(err) => {
+                        errors.insert(key, Error::Status(err));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::MultiError(errors))
+        }
     }
 
     async fn keep_alive(&mut self) -> Result<(), Error> {
         // TODO: verify read_packet returns a noop code
         for conn in self.ring.into_iter() {
             conn.write_packet(Packet::noop()).await?;
-            conn.read_packet().await?.error_for_status()?;
+            let packet = conn.read_packet().await?;
+            packet.error_for_status()?;
         }
         Ok(())
     }
@@ -223,7 +274,4 @@ where
     }
 }
 
-pub type Pool<C>
-where
-    C: Connection,
-= deadpool::managed::Pool<Client<C>, Error>;
+pub type Pool<C> = deadpool::managed::Pool<Client<C>, Error>;

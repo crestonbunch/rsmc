@@ -1,5 +1,3 @@
-use std::io::ErrorKind;
-
 use async_trait::async_trait;
 use rmsc_core::client::{Connection, Error as CoreError};
 use tokio::{
@@ -31,11 +29,11 @@ impl Connection for TokioConnection {
 #[cfg(test)]
 mod test {
     use futures::Future;
+    use rand::prelude::*;
     use rmsc_core::client::{ClientConfig, Pool};
     use std::{
-        any::Any,
         collections::HashMap,
-        io::{BufRead, BufReader, Read},
+        io::{BufRead, BufReader},
         process::{Child, Command, Stdio},
     };
 
@@ -49,8 +47,8 @@ mod test {
 
     impl MemcachedTester {
         fn new(port: usize) -> Self {
-            let name = String::from("test_memcached");
-            let mut proc = MemcachedTester::new_proc(&name, port);
+            let name = format!("test_memcached_{}", port);
+            let proc = MemcachedTester::new_proc(&name, port);
 
             Self {
                 procs: vec![proc],
@@ -120,17 +118,21 @@ mod test {
 
     #[test]
     fn test_connect() {
-        tokio_test::block_on(async {
-            TokioConnection::connect(String::from("127.0.0.1:11211"))
-                .await
-                .unwrap();
+        let mut rng = rand::thread_rng();
+        let random_port = rng.gen_range(10000..50000);
+        MemcachedTester::new(random_port).run(async {
+            let host = format!("127.0.0.1:{}", random_port);
+            TokioConnection::connect(host).await.unwrap();
         })
     }
 
     #[test]
     fn test_end_to_end() {
-        MemcachedTester::new(11211).run(async {
-            let cfg = ClientConfig::new(vec![String::from("127.0.0.1:11211")]);
+        let mut rng = rand::thread_rng();
+        let random_port = rng.gen_range(10000..50000);
+        MemcachedTester::new(random_port).run(async {
+            let host = format!("127.0.0.1:{}", random_port);
+            let cfg = ClientConfig::new(vec![host]);
             let pool = Pool::<TokioConnection>::new(cfg, 16);
             let mut client = pool.get().await.unwrap();
 
@@ -146,28 +148,40 @@ mod test {
             multi_data.insert(b"abc".to_vec(), b"123".to_vec());
             multi_data.insert(b"def".to_vec(), b"456".to_vec());
             client.set_multi(multi_data, 1).await.unwrap();
-            let mut result = client
+            let result = client
                 .get_multi(vec![b"abc", b"def", b"qwop"])
                 .await
                 .unwrap();
 
-            let a = result.remove(&b"abc".to_vec()).unwrap();
-            let b = result.remove(&b"def".to_vec()).unwrap();
-            let c = result.remove(&b"qwop".to_vec());
-            assert_eq!(b"123".to_vec(), a.unwrap());
-            assert_eq!(b"456".to_vec(), b.unwrap());
-            assert_eq!(true, c.is_none());
+            assert_eq!(b"123".to_vec(), result[&b"abc".to_vec()]);
+            assert_eq!(b"456".to_vec(), result[&b"def".to_vec()]);
+            assert_eq!(None, result.get(&b"qwop".to_vec()));
+
+            assert_eq!((), client.delete(b"abc").await.unwrap());
+            assert_eq!(None, client.get(b"abc").await.unwrap());
+            assert_eq!((), client.delete_multi(vec![b"key", b"def"]).await.unwrap());
+            assert_eq!(None, client.get(b"key").await.unwrap());
+            assert_eq!(None, client.get(b"def").await.unwrap());
+
+            assert_eq!(None, client.get(b"qwop").await.unwrap());
+            assert_eq!((), client.delete(b"qwop").await.unwrap());
+            assert_eq!(None, client.get(b"qwop").await.unwrap());
         });
     }
 
     #[test]
     fn test_cluster() {
-        MemcachedTester::new_cluster(vec![11211, 11212, 11213]).run(async {
-            let cfg = ClientConfig::new(vec![
-                String::from("127.0.0.1:11211"),
-                String::from("127.0.0.1:11212"),
-                String::from("127.0.0.1:11213"),
-            ]);
+        let rng = &mut rand::thread_rng();
+        let mut random_ports = (10000..50000).collect::<Vec<_>>();
+        random_ports.shuffle(rng);
+        let random_ports: Vec<_> = random_ports[0..3].into();
+        MemcachedTester::new_cluster(random_ports.clone()).run(async {
+            let cfg = ClientConfig::new(
+                random_ports
+                    .into_iter()
+                    .map(|port| format!("127.0.0.1:{}", port))
+                    .collect(),
+            );
             let pool = Pool::<TokioConnection>::new(cfg, 16);
             let mut client = pool.get().await.unwrap();
 
@@ -183,17 +197,28 @@ mod test {
             multi_data.insert(b"abc".to_vec(), b"123".to_vec());
             multi_data.insert(b"def".to_vec(), b"456".to_vec());
             client.set_multi(multi_data, 1).await.unwrap();
-            let mut result = client
+            let result = client
                 .get_multi(vec![b"abc", b"def", b"qwop"])
                 .await
                 .unwrap();
 
-            let a = result.remove(&b"abc".to_vec()).unwrap();
-            let b = result.remove(&b"def".to_vec()).unwrap();
-            let c = result.remove(&b"qwop".to_vec());
-            assert_eq!(b"123".to_vec(), a.unwrap());
-            assert_eq!(b"456".to_vec(), b.unwrap());
-            assert_eq!(true, c.is_none());
+            assert_eq!(b"123".to_vec(), result[&b"abc".to_vec()]);
+            assert_eq!(b"456".to_vec(), result[&b"def".to_vec()]);
+            assert_eq!(None, result.get(&b"qwop".to_vec()));
+
+            assert_eq!(b"123".to_vec(), result[&b"abc".to_vec()]);
+            assert_eq!(b"456".to_vec(), result[&b"def".to_vec()]);
+            assert_eq!(None, result.get(&b"qwop".to_vec()));
+
+            assert_eq!((), client.delete(b"abc").await.unwrap());
+            assert_eq!(None, client.get(b"abc").await.unwrap());
+            assert_eq!((), client.delete_multi(vec![b"key", b"def"]).await.unwrap());
+            assert_eq!(None, client.get(b"key").await.unwrap());
+            assert_eq!(None, client.get(b"def").await.unwrap());
+
+            assert_eq!(None, client.get(b"qwop").await.unwrap());
+            assert_eq!((), client.delete(b"qwop").await.unwrap());
+            assert_eq!(None, client.get(b"qwop").await.unwrap());
         });
     }
 }
