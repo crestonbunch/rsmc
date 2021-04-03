@@ -5,6 +5,16 @@ use tokio::{
     net::TcpStream,
 };
 
+/// A TokioConnection uses the tokio runtime to form TCP connections to
+/// memcached. Use this to create a connection pool. For example:
+///
+/// ```ignore
+/// use rmsc_core::client::{Pool, ClientConfig};
+/// use rsmc_tokio::TokioConnection;
+///
+/// let cfg = ClientConfig::new_uncompressed(vec!["localhost:11211".into()]);
+/// let pool = Pool::<TokioConnection, _>::new(cfg, 16);
+/// ```
 #[derive(Debug)]
 pub struct TokioConnection {
     stream: TcpStream,
@@ -123,7 +133,7 @@ mod test {
     #[test]
     fn test_connect() {
         let mut rng = rand::thread_rng();
-        let random_port = rng.gen_range(10000..50000);
+        let random_port = rng.gen_range(10000..20000);
         MemcachedTester::new(random_port).run(async {
             let host = format!("127.0.0.1:{}", random_port);
             TokioConnection::connect(host).await.unwrap();
@@ -133,7 +143,7 @@ mod test {
     #[test]
     fn test_end_to_end() {
         let mut rng = rand::thread_rng();
-        let random_port = rng.gen_range(10000..50000);
+        let random_port = rng.gen_range(20001..30000);
         MemcachedTester::new(random_port).run(async {
             let host = format!("127.0.0.1:{}", random_port);
             let cfg = ClientConfig::new_uncompressed(vec![host]);
@@ -176,7 +186,7 @@ mod test {
     #[test]
     fn test_cluster() {
         let rng = &mut rand::thread_rng();
-        let mut random_ports = (10000..50000).collect::<Vec<_>>();
+        let mut random_ports = (30001..40000).collect::<Vec<_>>();
         random_ports.shuffle(rng);
         let random_ports: Vec<_> = random_ports[0..3].into();
         MemcachedTester::new_cluster(random_ports.clone()).run(async {
