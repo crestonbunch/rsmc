@@ -28,9 +28,13 @@ impl Connection for TokioConnection {
 
 #[cfg(test)]
 mod test {
+    use flate2::Compression;
     use futures::Future;
     use rand::prelude::*;
-    use rmsc_core::client::{ClientConfig, Pool};
+    use rmsc_core::{
+        client::{ClientConfig, Pool},
+        zlib::ZlibCompressor,
+    };
     use std::{
         collections::HashMap,
         io::{BufRead, BufReader},
@@ -132,8 +136,8 @@ mod test {
         let random_port = rng.gen_range(10000..50000);
         MemcachedTester::new(random_port).run(async {
             let host = format!("127.0.0.1:{}", random_port);
-            let cfg = ClientConfig::new(vec![host]);
-            let pool = Pool::<TokioConnection>::new(cfg, 16);
+            let cfg = ClientConfig::new_uncompressed(vec![host]);
+            let pool = Pool::<TokioConnection, _>::new(cfg, 16);
             let mut client = pool.get().await.unwrap();
 
             assert_eq!(None, client.get(b"key").await.unwrap());
@@ -181,8 +185,9 @@ mod test {
                     .into_iter()
                     .map(|port| format!("127.0.0.1:{}", port))
                     .collect(),
+                ZlibCompressor::new(Compression::default(), 1),
             );
-            let pool = Pool::<TokioConnection>::new(cfg, 16);
+            let pool = Pool::<TokioConnection, _>::new(cfg, 16);
             let mut client = pool.get().await.unwrap();
 
             assert_eq!(None, client.get(b"key").await.unwrap());

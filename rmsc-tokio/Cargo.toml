@@ -11,5 +11,6 @@ tokio = { version = "1.2", features = ["full"] }
 rmsc-core = { path = "../rmsc-core" }
 
 [dev-dependencies]
+flate2 = "1.0"
 tokio-test = "0.4"
 rand = "0.8"

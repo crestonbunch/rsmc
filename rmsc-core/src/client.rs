@@ -32,16 +32,34 @@ impl From<Status> for Error {
     }
 }
 
+pub trait Compressor: Clone + Copy + Send + Sync {
+    fn compress(&self, packet: Packet) -> Result<Packet, Error>;
+    fn decompress(&self, packet: Packet) -> Result<Packet, Error>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NoCompressor;
+
+impl Compressor for NoCompressor {
+    fn compress(&self, bytes: Packet) -> Result<Packet, Error> {
+        Ok(bytes.into())
+    }
+
+    fn decompress(&self, bytes: Packet) -> Result<Packet, Error> {
+        Ok(bytes.into())
+    }
+}
+
 /// A connection is an async interface to memcached, which requires a concrete
 /// implementation using an underlying async runtime (e.g. tokio or async-std.)
 #[async_trait]
-pub trait Connection: Sized + Send + Sync {
+pub trait Connection: Sized + Send + Sync + 'static {
     /// Connect to a of memcached node nodes.
     async fn connect(url: String) -> Result<Self, Error>;
     async fn read(&mut self, buf: &mut Vec<u8>) -> Result<usize, Error>;
     async fn write(&mut self, data: &[u8]) -> Result<(), Error>;
 
-    async fn read_packet(&mut self) -> Result<Packet, Error> {
+    async fn read_packet<P: Compressor>(&mut self, compressor: P) -> Result<Packet, Error> {
         let mut buf = vec![0_u8; 24];
         self.read(&mut buf).await?;
         let header = Header::read_response(&buf[..])?;
@@ -49,43 +67,65 @@ pub trait Connection: Sized + Send + Sync {
         if body.len() > 0 {
             self.read(&mut body).await?;
         }
-        Ok(header.read_packet(&body[..])?)
+        let packet = header.read_packet(&body[..])?;
+        compressor.decompress(packet)
     }
 
-    async fn write_packet(&mut self, packet: Packet) -> Result<(), Error> {
+    async fn write_packet<P: Compressor>(
+        &mut self,
+        compressor: P,
+        packet: Packet,
+    ) -> Result<(), Error> {
+        let packet = compressor.compress(packet)?;
         let bytes: Vec<u8> = packet.into();
         self.write(&bytes[..]).await
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ClientConfig {
+pub struct ClientConfig<P: Compressor> {
     endpoints: Vec<String>,
+    compressor: P,
 }
 
-impl ClientConfig {
-    pub fn new(endpoints: Vec<String>) -> Self {
-        Self { endpoints }
+impl<P: Compressor> ClientConfig<P> {
+    pub fn new(endpoints: Vec<String>, compressor: P) -> Self {
+        Self {
+            endpoints,
+            compressor,
+        }
+    }
+}
+
+impl ClientConfig<NoCompressor> {
+    pub fn new_uncompressed(endpoints: Vec<String>) -> Self {
+        Self::new(endpoints, NoCompressor)
     }
 }
 
 /// A client manages connections to every node in a memcached cluster.
 #[derive(Debug)]
-pub struct Client<C: Connection> {
+pub struct Client<C: Connection, P: Compressor> {
     ring: Ring<C>,
+    compressor: P,
 }
 
-impl<C: Connection> Client<C> {
-    pub async fn new(config: ClientConfig) -> Result<Self, Error> {
-        let ring = Ring::new(config.endpoints).await?;
-        Ok(Self { ring })
+impl<C: Connection, P: Compressor> Client<C, P> {
+    pub async fn new(config: ClientConfig<P>) -> Result<Self, Error> {
+        let ClientConfig {
+            endpoints,
+            compressor,
+        } = config;
+        let ring = Ring::new(endpoints).await?;
+        Ok(Self { ring, compressor })
     }
 
     pub async fn get(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
         let conn = self.ring.get_conn(key)?;
-        conn.write_packet(Packet::get(key.into())).await?;
+        conn.write_packet(self.compressor, Packet::get(key.into()))
+            .await?;
 
-        let packet = conn.read_packet().await?;
+        let packet = conn.read_packet(self.compressor).await?;
         match packet.error_for_status() {
             Ok(()) => Ok(Some(packet.value)),
             Err(Status::KeyNotFound) => Ok(None),
@@ -110,7 +150,7 @@ impl<C: Connection> Client<C> {
 
             for packet in reqs {
                 let key = packet.key.clone();
-                let result = conn.write_packet(packet).await;
+                let result = conn.write_packet(self.compressor, packet).await;
                 if let Err(err) = result {
                     errors.insert(key, err);
                 }
@@ -122,7 +162,7 @@ impl<C: Connection> Client<C> {
             let last_key = pipeline.pop().unwrap();
             let mut finished = false;
             while !finished {
-                let packet = conn.read_packet().await?;
+                let packet = conn.read_packet(self.compressor).await?;
                 let key = packet.key.clone();
                 finished = packet.key == last_key;
                 match packet.error_for_status() {
@@ -146,9 +186,12 @@ impl<C: Connection> Client<C> {
 
     pub async fn set(&mut self, key: &[u8], data: &[u8], expire: u32) -> Result<(), Error> {
         let conn = self.ring.get_conn(key)?;
-        conn.write_packet(Packet::set(key.into(), data.into(), expire))
-            .await?;
-        conn.read_packet().await?;
+        conn.write_packet(
+            self.compressor,
+            Packet::set(key.into(), data.into(), expire),
+        )
+        .await?;
+        conn.read_packet(self.compressor).await?;
         Ok(())
     }
 
@@ -174,7 +217,7 @@ impl<C: Connection> Client<C> {
 
             for packet in reqs {
                 let key = packet.key.clone();
-                if let Err(err) = conn.write_packet(packet).await {
+                if let Err(err) = conn.write_packet(self.compressor, packet).await {
                     errors.insert(key, err);
                 }
             }
@@ -184,7 +227,7 @@ impl<C: Connection> Client<C> {
         for (conn, _) in self.ring.get_conns(keys.clone()) {
             let mut finished = false;
             while !finished {
-                let packet = conn.read_packet().await?;
+                let packet = conn.read_packet(self.compressor).await?;
                 let key = packet.key.clone();
                 finished = packet.header.vbucket_or_status == 0;
                 match packet.error_for_status() {
@@ -206,8 +249,9 @@ impl<C: Connection> Client<C> {
 
     pub async fn delete(&mut self, key: &[u8]) -> Result<(), Error> {
         let conn = self.ring.get_conn(key)?;
-        conn.write_packet(Packet::delete(key.into())).await?;
-        conn.read_packet().await?;
+        conn.write_packet(self.compressor, Packet::delete(key.into()))
+            .await?;
+        conn.read_packet(self.compressor).await?;
         Ok(())
     }
 
@@ -219,7 +263,7 @@ impl<C: Connection> Client<C> {
             let reqs = pipeline.into_iter().map(|key| Packet::delete(key.into()));
             for packet in reqs {
                 let key = packet.key.clone();
-                if let Err(err) = conn.write_packet(packet).await {
+                if let Err(err) = conn.write_packet(self.compressor, packet).await {
                     errors.insert(key, err);
                 }
             }
@@ -228,7 +272,7 @@ impl<C: Connection> Client<C> {
         // TODO: parallelize
         for (conn, pipeline) in self.ring.get_conns(keys.clone()) {
             for _ in pipeline {
-                let packet = conn.read_packet().await?;
+                let packet = conn.read_packet(self.compressor).await?;
                 let key = packet.key.clone();
                 match packet.error_for_status() {
                     Ok(()) => (),
@@ -249,8 +293,8 @@ impl<C: Connection> Client<C> {
     async fn keep_alive(&mut self) -> Result<(), Error> {
         // TODO: verify read_packet returns a noop code
         for conn in self.ring.into_iter() {
-            conn.write_packet(Packet::noop()).await?;
-            let packet = conn.read_packet().await?;
+            conn.write_packet(self.compressor, Packet::noop()).await?;
+            let packet = conn.read_packet(self.compressor).await?;
             packet.error_for_status()?;
         }
         Ok(())
@@ -258,20 +302,21 @@ impl<C: Connection> Client<C> {
 }
 
 #[async_trait]
-impl<C> Manager<Client<C>, Error> for ClientConfig
+impl<C, P> Manager<Client<C, P>, Error> for ClientConfig<P>
 where
-    C: Connection + Send + Sync + 'static,
+    C: Connection,
+    P: Compressor,
 {
-    async fn create(&self) -> Result<Client<C>, Error> {
+    async fn create(&self) -> Result<Client<C, P>, Error> {
         let mut client = Client::new(self.clone()).await?;
         client.keep_alive().await?;
         Ok(client)
     }
 
-    async fn recycle(&self, client: &mut Client<C>) -> RecycleResult<Error> {
+    async fn recycle(&self, client: &mut Client<C, P>) -> RecycleResult<Error> {
         client.keep_alive().await?;
         Ok(())
     }
 }
 
-pub type Pool<C> = deadpool::managed::Pool<Client<C>, Error>;
+pub type Pool<C, P> = deadpool::managed::Pool<Client<C, P>, Error>;
