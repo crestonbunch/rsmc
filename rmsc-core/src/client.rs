@@ -11,8 +11,13 @@ pub enum Error {
     IoError(std::io::Error),
     Protocol(ProtocolError),
     Status(Status),
-    MultiError(HashMap<Vec<u8>, Error>),
 }
+
+pub type BulkOkResponse = HashMap<Vec<u8>, Vec<u8>>;
+pub type BulkErrResponse = HashMap<Vec<u8>, Error>;
+
+pub type BulkUpdateResponse = Result<BulkErrResponse, Error>;
+pub type BulkGetResponse = Result<(BulkOkResponse, BulkErrResponse), Error>;
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
@@ -133,10 +138,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         }
     }
 
-    pub async fn get_multi<'a>(
-        &mut self,
-        keys: Vec<&[u8]>,
-    ) -> Result<HashMap<Vec<u8>, Vec<u8>>, Error> {
+    pub async fn get_multi<'a>(&mut self, keys: Vec<&[u8]>) -> BulkGetResponse {
         let mut values = HashMap::new();
         let mut errors = HashMap::new();
 
@@ -177,11 +179,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
             }
         }
 
-        if errors.is_empty() {
-            Ok(values)
-        } else {
-            Err(Error::MultiError(errors))
-        }
+        Ok((values, errors))
     }
 
     pub async fn set(&mut self, key: &[u8], data: &[u8], expire: u32) -> Result<(), Error> {
@@ -199,7 +197,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         &mut self,
         mut data: HashMap<Vec<u8>, Vec<u8>>,
         expire: u32,
-    ) -> Result<(), Error> {
+    ) -> BulkUpdateResponse {
         let mut errors = HashMap::new();
 
         let keys = data.keys().cloned().collect::<Vec<_>>();
@@ -240,11 +238,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
             }
         }
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::MultiError(errors))
-        }
+        Ok(errors)
     }
 
     pub async fn delete(&mut self, key: &[u8]) -> Result<(), Error> {
@@ -255,7 +249,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         Ok(())
     }
 
-    pub async fn delete_multi(&mut self, keys: Vec<&[u8]>) -> Result<(), Error> {
+    pub async fn delete_multi(&mut self, keys: Vec<&[u8]>) -> BulkUpdateResponse {
         let mut errors = HashMap::new();
 
         // TODO: parallelize
@@ -283,11 +277,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
             }
         }
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::MultiError(errors))
-        }
+        Ok(errors)
     }
 
     async fn keep_alive(&mut self) -> Result<(), Error> {

@@ -152,7 +152,7 @@ mod test {
             multi_data.insert(b"abc".to_vec(), b"123".to_vec());
             multi_data.insert(b"def".to_vec(), b"456".to_vec());
             client.set_multi(multi_data, 1).await.unwrap();
-            let result = client
+            let (result, _) = client
                 .get_multi(vec![b"abc", b"def", b"qwop"])
                 .await
                 .unwrap();
@@ -163,7 +163,7 @@ mod test {
 
             assert_eq!((), client.delete(b"abc").await.unwrap());
             assert_eq!(None, client.get(b"abc").await.unwrap());
-            assert_eq!((), client.delete_multi(vec![b"key", b"def"]).await.unwrap());
+            client.delete_multi(vec![b"key", b"def"]).await.unwrap();
             assert_eq!(None, client.get(b"key").await.unwrap());
             assert_eq!(None, client.get(b"def").await.unwrap());
 
@@ -202,7 +202,7 @@ mod test {
             multi_data.insert(b"abc".to_vec(), b"123".to_vec());
             multi_data.insert(b"def".to_vec(), b"456".to_vec());
             client.set_multi(multi_data, 1).await.unwrap();
-            let result = client
+            let (result, _) = client
                 .get_multi(vec![b"abc", b"def", b"qwop"])
                 .await
                 .unwrap();
@@ -217,7 +217,7 @@ mod test {
 
             assert_eq!((), client.delete(b"abc").await.unwrap());
             assert_eq!(None, client.get(b"abc").await.unwrap());
-            assert_eq!((), client.delete_multi(vec![b"key", b"def"]).await.unwrap());
+            client.delete_multi(vec![b"key", b"def"]).await.unwrap();
             assert_eq!(None, client.get(b"key").await.unwrap());
             assert_eq!(None, client.get(b"def").await.unwrap());
 
