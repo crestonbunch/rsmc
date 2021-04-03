@@ -36,7 +36,7 @@ impl<C: Connection> Ring<C> {
             conns.push(C::connect(url).await?);
         }
 
-        buckets.sort();
+        buckets.sort_unstable();
         Ok(Self { conns, buckets })
     }
 
@@ -64,8 +64,7 @@ impl<C: Connection> Ring<C> {
         out
     }
 
-    fn find_bucket(&self, key: &[u8]) -> usize {
-        let mut key = &key[..];
+    fn find_bucket(&self, mut key: &[u8]) -> usize {
         // Find the position of the hash on the ring
         let ring_pos = murmur3_32(&mut key, 0).unwrap();
         // Find the bucket containing the ring position

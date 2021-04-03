@@ -148,21 +148,21 @@ impl Packet {
     }
 }
 
-impl Into<Vec<u8>> for Packet {
-    fn into(self) -> Vec<u8> {
+impl From<Packet> for Vec<u8> {
+    fn from(p: Packet) -> Self {
         vec![
-            &self.header.magic.to_be_bytes()[..],
-            &self.header.opcode.to_be_bytes()[..],
-            &self.header.key_length.to_be_bytes()[..],
-            &self.header.extras_length.to_be_bytes()[..],
-            &self.header.data_type.to_be_bytes()[..],
-            &self.header.vbucket_or_status.to_be_bytes()[..],
-            &self.header.body_len.to_be_bytes()[..],
-            &self.header.opaque.to_be_bytes()[..],
-            &self.header.cas.to_be_bytes()[..],
-            &self.extras[..],
-            &self.key[..],
-            &self.value[..],
+            &p.header.magic.to_be_bytes()[..],
+            &p.header.opcode.to_be_bytes()[..],
+            &p.header.key_length.to_be_bytes()[..],
+            &p.header.extras_length.to_be_bytes()[..],
+            &p.header.data_type.to_be_bytes()[..],
+            &p.header.vbucket_or_status.to_be_bytes()[..],
+            &p.header.body_len.to_be_bytes()[..],
+            &p.header.opaque.to_be_bytes()[..],
+            &p.header.cas.to_be_bytes()[..],
+            &p.extras[..],
+            &p.key[..],
+            &p.value[..],
         ]
         .concat()
     }

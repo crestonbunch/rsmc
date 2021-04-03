@@ -42,11 +42,11 @@ pub struct NoCompressor;
 
 impl Compressor for NoCompressor {
     fn compress(&self, bytes: Packet) -> Result<Packet, Error> {
-        Ok(bytes.into())
+        Ok(bytes)
     }
 
     fn decompress(&self, bytes: Packet) -> Result<Packet, Error> {
-        Ok(bytes.into())
+        Ok(bytes)
     }
 }
 
@@ -64,7 +64,7 @@ pub trait Connection: Sized + Send + Sync + 'static {
         self.read(&mut buf).await?;
         let header = Header::read_response(&buf[..])?;
         let mut body = vec![0_u8; header.body_len as usize];
-        if body.len() > 0 {
+        if !body.is_empty() {
             self.read(&mut body).await?;
         }
         let packet = header.read_packet(&body[..])?;
@@ -129,7 +129,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         match packet.error_for_status() {
             Ok(()) => Ok(Some(packet.value)),
             Err(Status::KeyNotFound) => Ok(None),
-            Err(status) => Err(status)?,
+            Err(status) => Err(status.into()),
         }
     }
 
@@ -202,7 +202,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     ) -> Result<(), Error> {
         let mut errors = HashMap::new();
 
-        let keys = data.keys().map(|k| k.clone()).collect::<Vec<_>>();
+        let keys = data.keys().cloned().collect::<Vec<_>>();
         let keys = keys.iter().map(|k| &k[..]).collect::<Vec<_>>();
 
         // TODO: parallelize
@@ -212,7 +212,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
             let reqs = pipeline
                 .into_iter()
                 .map(|key| (key, data.remove(key).unwrap()))
-                .map(|(key, value)| Packet::setq(key.into(), value, expire).into())
+                .map(|(key, value)| Packet::setq(key.into(), value, expire))
                 .chain(vec![Packet::set(last_key.into(), last_val, expire)]);
 
             for packet in reqs {
