@@ -14,7 +14,7 @@ repository = "https://github.com/crestonbunch/rsmc"
 async-trait = "0.1"
 futures = "0.3"
 tokio = { version = "1.2", features = ["full"] }
-rsmc-core = { path = "../rsmc-core" }
+rsmc-core = "0.1.0"
 
 [dev-dependencies]
 flate2 = "1.0"
