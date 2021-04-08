@@ -1,7 +1,7 @@
 # rsmc
 
 This provides a full-featured async memcached client for multiple async
-runtimes, currently tokio and async-std.
+runtimes (currently only tokio, async-std to follow soon.)
 
 This is still an early implementation, so expect some bugs and
 missing features. If you find something is wrong, please open
@@ -24,3 +24,9 @@ Features:
   - [ ] Support for different hashing algorithms.
 - [x] Compression
   - [x] Support for different compression algorithms.
+
+# Usage
+
+See child crates for more details
+
+- [rmsc-tokio](rsmc-tokio/README.md)
