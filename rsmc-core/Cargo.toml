@@ -1,5 +1,5 @@
 [package]
-name = "rmsc-core"
+name = "rsmc-core"
 version = "0.1.0"
 authors = ["Creston Bunch <rust@bunch.im>"]
 edition = "2018"

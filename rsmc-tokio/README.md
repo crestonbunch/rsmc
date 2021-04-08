@@ -29,11 +29,11 @@ Features:
 
 ```rust
 use flate2::Compression;
-use rmsc_core::{
+use rsmc_core::{
     client::{ClientConfig, Pool},
     zlib::ZlibCompressor,
 };
-use rmsc_tokio::TokioConnection;
+use rsmc_tokio::TokioConnection;
 
 
 // Consistent hashing is used to distribute keys

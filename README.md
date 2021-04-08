@@ -29,4 +29,4 @@ Features:
 
 See child crates for more details
 
-- [rmsc-tokio](rsmc-tokio/README.md)
+- [rsmc-tokio](rsmc-tokio/README.md)

@@ -1,5 +1,5 @@
 [package]
-name = "rmsc-tokio"
+name = "rsmc-tokio"
 version = "0.1.0"
 authors = ["Creston Bunch <rust@bunch.im>"]
 edition = "2018"
@@ -8,7 +8,7 @@ edition = "2018"
 async-trait = "0.1"
 futures = "0.3"
 tokio = { version = "1.2", features = ["full"] }
-rmsc-core = { path = "../rmsc-core" }
+rsmc-core = { path = "../rsmc-core" }
 
 [dev-dependencies]
 flate2 = "1.0"

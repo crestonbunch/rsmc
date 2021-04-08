@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rmsc_core::client::{Connection, Error as CoreError};
+use rsmc_core::client::{Connection, Error as CoreError};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -9,7 +9,7 @@ use tokio::{
 /// memcached. Use this to create a connection pool. For example:
 ///
 /// ```ignore
-/// use rmsc_core::client::{Pool, ClientConfig};
+/// use rsmc_core::client::{Pool, ClientConfig};
 /// use rsmc_tokio::TokioConnection;
 ///
 /// let cfg = ClientConfig::new_uncompressed(vec!["localhost:11211".into()]);
@@ -41,7 +41,7 @@ mod test {
     use flate2::Compression;
     use futures::Future;
     use rand::prelude::*;
-    use rmsc_core::{
+    use rsmc_core::{
         client::{ClientConfig, Pool},
         zlib::ZlibCompressor,
     };
