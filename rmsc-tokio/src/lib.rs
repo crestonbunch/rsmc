@@ -143,7 +143,7 @@ mod test {
     #[test]
     fn test_end_to_end() {
         let mut rng = rand::thread_rng();
-        let random_port = rng.gen_range(20001..30000);
+        let random_port = rng.gen_range(20000..30000);
         MemcachedTester::new(random_port).run(async {
             let host = format!("127.0.0.1:{}", random_port);
             let cfg = ClientConfig::new_uncompressed(vec![host]);
