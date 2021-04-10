@@ -5,16 +5,24 @@ use tokio::{
     net::TcpStream,
 };
 
-/// A TokioConnection uses the tokio runtime to form TCP connections to
-/// memcached. Use this to create a connection pool. For example:
+pub use rsmc_core::client::ClientConfig;
+#[cfg(feature = "zlib")]
+pub use rsmc_core::zlib::ZlibCompressor;
+
+/// A pool of connections to memcached using tokio for async I/O and
+/// the desired compression scheme. Use this to create a connection pool.
+/// For example:
 ///
 /// ```ignore
-/// use rsmc_core::client::{Pool, ClientConfig};
-/// use rsmc_tokio::TokioConnection;
+/// use rsmc_tokio::{Pool, ClientConfig};
 ///
 /// let cfg = ClientConfig::new_uncompressed(vec!["localhost:11211".into()]);
-/// let pool = Pool::<TokioConnection, _>::new(cfg, 16);
+/// let pool = Pool::new(cfg, 16);
 /// ```
+pub type Pool<C> = rsmc_core::client::Pool<TokioConnection, C>;
+
+/// A TokioConnection uses the tokio runtime to form TCP connections to
+/// memcached.
 #[derive(Debug)]
 pub struct TokioConnection {
     stream: TcpStream,
@@ -41,10 +49,6 @@ mod test {
     use flate2::Compression;
     use futures::Future;
     use rand::prelude::*;
-    use rsmc_core::{
-        client::{ClientConfig, Pool},
-        zlib::ZlibCompressor,
-    };
     use std::{
         collections::HashMap,
         io::{BufRead, BufReader},
@@ -147,7 +151,7 @@ mod test {
         MemcachedTester::new(random_port).run(async {
             let host = format!("127.0.0.1:{}", random_port);
             let cfg = ClientConfig::new_uncompressed(vec![host]);
-            let pool = Pool::<TokioConnection, _>::new(cfg, 16);
+            let pool = Pool::new(cfg, 16);
             let mut client = pool.get().await.unwrap();
 
             assert_eq!(None, client.get(b"key").await.unwrap());
@@ -197,7 +201,7 @@ mod test {
                     .collect(),
                 ZlibCompressor::new(Compression::default(), 1),
             );
-            let pool = Pool::<TokioConnection, _>::new(cfg, 16);
+            let pool = Pool::new(cfg, 16);
             let mut client = pool.get().await.unwrap();
 
             assert_eq!(None, client.get(b"key").await.unwrap());

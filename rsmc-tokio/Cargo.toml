@@ -10,11 +10,15 @@ license = "MIT"
 keywords = ["memcache", "memcached", "async", "tokio"]
 repository = "https://github.com/crestonbunch/rsmc"
 
+[features]
+default = ["zlib"]
+zlib = ["rsmc-core/zlib"]
+
 [dependencies]
 async-trait = "0.1"
 futures = "0.3"
+rsmc-core = { version = "0.1.0", default-features = false }
 tokio = { version = "1.2", features = ["full"] }
-rsmc-core = "0.1.0"
 
 [dev-dependencies]
 flate2 = "1.0"
