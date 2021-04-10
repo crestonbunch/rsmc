@@ -1,4 +1,9 @@
-#[derive(Debug, PartialEq)]
+use std::{
+    error::Error as StdError,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
+
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Status {
     UnknownStatus,
     NoError,
@@ -43,9 +48,47 @@ impl From<u16> for Status {
     }
 }
 
-#[derive(Debug, PartialEq)]
+impl Display for Status {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Status::UnknownStatus => write!(f, "Unknown status"),
+            Status::NoError => write!(f, "No error"),
+            Status::KeyNotFound => write!(f, "Key not found"),
+            Status::KeyExists => write!(f, "Key exists"),
+            Status::ValueTooLarge => write!(f, "Value too large"),
+            Status::InvalidArguments => write!(f, "Invalid arguments"),
+            Status::ItemNotStored => write!(f, "Item not stored"),
+            Status::IncrDecrOnNonNumericValue => write!(f, "Incr or decr on non-numeric value"),
+            Status::VbucketBelongsToAnotherServer => write!(f, "Vbucket belongs to another server"),
+            Status::AuthenticationError => write!(f, "Authentication error"),
+            Status::AuthenticationContinue => write!(f, "Authentication continue"),
+            Status::UnknownCommand => write!(f, "Unknown command"),
+            Status::OutOfMemory => write!(f, "Out of memory"),
+            Status::NotSupported => write!(f, "Not supported"),
+            Status::InternalError => write!(f, "Internal error"),
+            Status::Busy => write!(f, "Busy"),
+            Status::TemporaryFailure => write!(f, "TemporaryFailure"),
+        }
+    }
+}
+
+impl StdError for Status {}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProtocolError {
     InvalidMagic(u8),
     PacketTooSmall,
     BodySizeMismatch,
 }
+
+impl Display for ProtocolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            ProtocolError::InvalidMagic(byte) => write!(f, "Invalid magic byte: {}", byte),
+            ProtocolError::PacketTooSmall => write!(f, "Packet too small"),
+            ProtocolError::BodySizeMismatch => write!(f, "Body size mismatch"),
+        }
+    }
+}
+
+impl StdError for ProtocolError {}

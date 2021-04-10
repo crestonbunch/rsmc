@@ -8,7 +8,11 @@ use crate::{
 };
 use async_trait::async_trait;
 use deadpool::managed::{Manager, RecycleResult};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    error::Error as StdError,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
 
 /// An error causing during client communication with Memcached.
 #[derive(Debug)]
@@ -55,6 +59,26 @@ impl From<ProtocolError> for Error {
 impl From<Status> for Error {
     fn from(err: Status) -> Self {
         Self::Status(err)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Error::IoError(err) => write!(f, "IoError: {}", err),
+            Error::Protocol(err) => write!(f, "ProtocolError: {}", err),
+            Error::Status(err) => write!(f, "StatusError: {}", err),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Error::IoError(err) => Some(err),
+            Error::Protocol(err) => Some(err),
+            Error::Status(err) => Some(err),
+        }
     }
 }
 
@@ -382,3 +406,22 @@ where
 /// constantly recreate TCP connections, while also balancing the total
 /// number of connections open at a time.
 pub type Pool<C, P> = deadpool::managed::Pool<Client<C, P>, Error>;
+
+#[cfg(test)]
+mod tests {
+    use crate::protocol::ProtocolError;
+
+    use super::Error;
+
+    #[test]
+    fn test_err_display() {
+        assert_eq!(
+            "ProtocolError: Invalid magic byte: 8",
+            format!("{}", Error::Protocol(ProtocolError::InvalidMagic(8)))
+        );
+        assert_eq!(
+            "StatusError: Key not found",
+            format!("{}", Error::Status(crate::protocol::Status::KeyNotFound))
+        );
+    }
+}
