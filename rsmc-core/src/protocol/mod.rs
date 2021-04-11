@@ -2,7 +2,7 @@ mod error;
 mod packet;
 
 pub use error::{ProtocolError, Status};
-pub(crate) use packet::{Header, Packet};
+pub(crate) use packet::{Header, Packet, SetExtras};
 
 const MAGIC_REQUEST_VALUE: u8 = 0x80;
 const MAGIC_RESPONSE_VALUE: u8 = 0x81;

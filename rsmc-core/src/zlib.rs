@@ -2,7 +2,6 @@ use flate2::{
     write::{ZlibDecoder, ZlibEncoder},
     Compression,
 };
-
 use std::io::Write;
 
 use crate::{
@@ -89,7 +88,10 @@ impl Compressor for ZlibCompressor {
 mod tests {
     use flate2::Compression;
 
-    use crate::{client::Compressor, protocol::Packet};
+    use crate::{
+        client::Compressor,
+        protocol::{Packet, SetExtras},
+    };
 
     use super::ZlibCompressor;
 
@@ -97,9 +99,9 @@ mod tests {
     fn test_zlib() {
         let compressor = ZlibCompressor::new(Compression::new(9), 1);
 
-        let key = b"my_test_key".to_vec();
-        let value = b"0000000000000000000000000000000000000000000000".to_vec();
-        let packet = Packet::set(key, value, 300);
+        let key = b"my_test_key";
+        let value = b"0000000000000000000000000000000000000000000000";
+        let packet = Packet::set(&key[..], &value[..], SetExtras::new(0, 300)).unwrap();
 
         let compressed = compressor.compress(packet.clone()).unwrap();
         let uncompressed = compressor.decompress(compressed.clone()).unwrap();

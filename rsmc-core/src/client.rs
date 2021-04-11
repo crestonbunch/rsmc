@@ -3,15 +3,17 @@
 //! implementations use the same client interface with the same API.
 
 use crate::{
-    protocol::{Header, Packet, ProtocolError, Status},
+    protocol::{Header, Packet, ProtocolError, SetExtras, Status},
     ring::Ring,
 };
 use async_trait::async_trait;
 use deadpool::managed::{Manager, RecycleResult};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::HashMap,
     error::Error as StdError,
     fmt::{Display, Formatter, Result as FmtResult},
+    hash::Hash,
 };
 
 /// An error causing during client communication with Memcached.
@@ -21,13 +23,15 @@ pub enum Error {
     IoError(std::io::Error),
     /// An error caused by incorrectly implementing the memcached protocol.
     Protocol(ProtocolError),
+    /// An error caused by (de-)serializing a value.
+    Bincode(bincode::Error),
     /// An error caused by a non-zero status received from a packet.
     Status(Status),
 }
 
 /// The result of of a multi_get() request. A map of all of keys for which
 /// memcached returned a found response, and their corresponding values.
-pub type BulkOkResponse = HashMap<Vec<u8>, Vec<u8>>;
+pub type BulkOkResponse<V> = HashMap<Vec<u8>, V>;
 
 /// The result of a multi_*() request. A map of all keys for which there
 /// was an error for specific keys. These can be treated as get misses
@@ -42,7 +46,7 @@ pub type BulkUpdateResponse = Result<BulkErrResponse, Error>;
 /// responses. The err responses can be treated as get misses, but should be
 /// logged somewhere for visibility. Lots of them could indicate a serious
 /// underlying issue.
-pub type BulkGetResponse = Result<(BulkOkResponse, BulkErrResponse), Error>;
+pub type BulkGetResponse<V> = Result<(BulkOkResponse<V>, BulkErrResponse), Error>;
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
@@ -53,6 +57,12 @@ impl From<std::io::Error> for Error {
 impl From<ProtocolError> for Error {
     fn from(err: ProtocolError) -> Self {
         Self::Protocol(err)
+    }
+}
+
+impl From<bincode::Error> for Error {
+    fn from(err: bincode::Error) -> Self {
+        Self::Bincode(err)
     }
 }
 
@@ -67,6 +77,7 @@ impl Display for Error {
         match self {
             Error::IoError(err) => write!(f, "IoError: {}", err),
             Error::Protocol(err) => write!(f, "ProtocolError: {}", err),
+            Error::Bincode(err) => write!(f, "BincodeError: {}", err),
             Error::Status(err) => write!(f, "StatusError: {}", err),
         }
     }
@@ -77,6 +88,7 @@ impl StdError for Error {
         match self {
             Error::IoError(err) => Some(err),
             Error::Protocol(err) => Some(err),
+            Error::Bincode(err) => Some(err),
             Error::Status(err) => Some(err),
         }
     }
@@ -201,14 +213,18 @@ impl<C: Connection, P: Compressor> Client<C, P> {
 
     /// Get a single value from memcached. Returns None when the key is not
     /// found (i.e., a miss).
-    pub async fn get(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    pub async fn get<K: AsRef<[u8]>, V: DeserializeOwned>(
+        &mut self,
+        key: K,
+    ) -> Result<Option<V>, Error> {
+        let key = key.as_ref();
         let conn = self.ring.get_conn(key)?;
-        conn.write_packet(self.compressor, Packet::get(key.into()))
+        conn.write_packet(self.compressor, Packet::get(key)?)
             .await?;
 
         let packet = conn.read_packet(self.compressor).await?;
         match packet.error_for_status() {
-            Ok(()) => Ok(Some(packet.value)),
+            Ok(()) => Ok(Some(packet.deserialize_value()?)),
             Err(Status::KeyNotFound) => Ok(None),
             Err(status) => Err(status.into()),
         }
@@ -218,17 +234,21 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     /// a tuple of (ok, err) responses. The error responses can be treated as
     /// misses, but should be logged for visibility. Lots of errors could be
     /// indicative of a serious problem.
-    pub async fn get_multi<'a>(&mut self, keys: Vec<&[u8]>) -> BulkGetResponse {
+    pub async fn get_multi<'a, K: AsRef<[u8]>, V: DeserializeOwned>(
+        &mut self,
+        keys: &[K],
+    ) -> BulkGetResponse<V> {
         let mut values = HashMap::new();
         let mut errors = HashMap::new();
 
         // TODO: parallelize
-        for (conn, mut pipeline) in self.ring.get_conns(keys.clone()) {
+        for (conn, mut pipeline) in self.ring.get_conns(keys) {
             let last_key = pipeline.pop().unwrap();
             let reqs = pipeline
                 .iter()
-                .map(|key| Packet::getkq((*key).into()))
-                .chain(vec![Packet::getk(last_key.into())]);
+                .map(Packet::getkq)
+                .chain(vec![Packet::getk(last_key)])
+                .collect::<Result<Vec<_>, _>>()?;
 
             for packet in reqs {
                 let key = packet.key.clone();
@@ -240,20 +260,20 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         }
 
         // TODO: parallelize
-        for (conn, mut pipeline) in self.ring.get_conns(keys.clone()) {
+        for (conn, mut pipeline) in self.ring.get_conns(keys) {
             let last_key = pipeline.pop().unwrap();
             let mut finished = false;
             while !finished {
                 let packet = conn.read_packet(self.compressor).await?;
                 let key = packet.key.clone();
-                finished = packet.key == last_key;
+                finished = key == last_key.as_ref();
                 match packet.error_for_status() {
                     Err(Status::KeyNotFound) => (),
                     Err(err) => {
                         errors.insert(key, Error::Status(err));
                     }
                     Ok(()) => {
-                        values.insert(key, packet.value);
+                        values.insert(key, packet.deserialize_value()?);
                     }
                 }
             }
@@ -267,11 +287,17 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     /// evicted by the LRU cache. Important: if `expire` is set to more than 30
     /// days in the future, then memcached will treat it as a unix timestamp
     /// instead of a duration.
-    pub async fn set(&mut self, key: &[u8], data: &[u8], expire: u32) -> Result<(), Error> {
+    pub async fn set<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        &mut self,
+        key: K,
+        data: &V,
+        expire: u32,
+    ) -> Result<(), Error> {
+        let key = key.as_ref();
         let conn = self.ring.get_conn(key)?;
         conn.write_packet(
             self.compressor,
-            Packet::set(key.into(), data.into(), expire),
+            Packet::set(key, data, SetExtras::new(0, expire))?,
         )
         .await?;
         conn.read_packet(self.compressor).await?;
@@ -283,25 +309,25 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     /// evicted by the LRU cache. Important: if `expire` is set to more than 30
     /// days in the future, then memcached will treat it as a unix timestamp
     /// instead of a duration.
-    pub async fn set_multi<'a>(
+    pub async fn set_multi<'a, V: Serialize, K: AsRef<[u8]> + Eq + Hash>(
         &mut self,
-        mut data: HashMap<Vec<u8>, Vec<u8>>,
+        data: HashMap<K, V>,
         expire: u32,
     ) -> BulkUpdateResponse {
         let mut errors = HashMap::new();
-
-        let keys = data.keys().cloned().collect::<Vec<_>>();
-        let keys = keys.iter().map(|k| &k[..]).collect::<Vec<_>>();
+        let keys = data.keys().collect::<Vec<_>>();
+        let extras = SetExtras::new(0, expire);
 
         // TODO: parallelize
-        for (conn, mut pipeline) in self.ring.get_conns(keys.clone()) {
+        for (conn, mut pipeline) in self.ring.get_conns(&keys[..]) {
             let last_key = pipeline.pop().unwrap();
-            let last_val = data.remove(last_key).unwrap();
+            let last_val = data.get(last_key).unwrap();
             let reqs = pipeline
                 .into_iter()
-                .map(|key| (key, data.remove(key).unwrap()))
-                .map(|(key, value)| Packet::setq(key.into(), value, expire))
-                .chain(vec![Packet::set(last_key.into(), last_val, expire)]);
+                .map(|key| (key, data.get(key).unwrap()))
+                .map(|(key, value)| Packet::setq(key, value, extras))
+                .chain(vec![Packet::set(last_key, last_val, extras)])
+                .collect::<Result<Vec<_>, _>>()?;
 
             for packet in reqs {
                 let key = packet.key.clone();
@@ -312,7 +338,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         }
 
         // TODO: parallelize
-        for (conn, _) in self.ring.get_conns(keys.clone()) {
+        for (conn, _) in self.ring.get_conns(&keys[..]) {
             let mut finished = false;
             while !finished {
                 let packet = conn.read_packet(self.compressor).await?;
@@ -332,21 +358,25 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     }
 
     /// Delete a key from memcached. Does nothing if the key is not set.
-    pub async fn delete(&mut self, key: &[u8]) -> Result<(), Error> {
+    pub async fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<(), Error> {
+        let key = key.as_ref();
         let conn = self.ring.get_conn(key)?;
-        conn.write_packet(self.compressor, Packet::delete(key.into()))
+        conn.write_packet(self.compressor, Packet::delete(key)?)
             .await?;
         conn.read_packet(self.compressor).await?;
         Ok(())
     }
 
     /// Delete multiple keys from memcached. Does nothing when a key is unset.
-    pub async fn delete_multi(&mut self, keys: Vec<&[u8]>) -> BulkUpdateResponse {
+    pub async fn delete_multi<K: AsRef<[u8]>>(&mut self, keys: &[K]) -> BulkUpdateResponse {
         let mut errors = HashMap::new();
 
         // TODO: parallelize
-        for (conn, pipeline) in self.ring.get_conns(keys.clone()) {
-            let reqs = pipeline.into_iter().map(|key| Packet::delete(key.into()));
+        for (conn, pipeline) in self.ring.get_conns(keys) {
+            let reqs = pipeline
+                .into_iter()
+                .map(Packet::delete)
+                .collect::<Result<Vec<_>, _>>()?;
             for packet in reqs {
                 let key = packet.key.clone();
                 if let Err(err) = conn.write_packet(self.compressor, packet).await {
@@ -356,7 +386,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         }
 
         // TODO: parallelize
-        for (conn, pipeline) in self.ring.get_conns(keys.clone()) {
+        for (conn, pipeline) in self.ring.get_conns(keys) {
             for _ in pipeline {
                 let packet = conn.read_packet(self.compressor).await?;
                 let key = packet.key.clone();
@@ -375,7 +405,7 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     async fn keep_alive(&mut self) -> Result<(), Error> {
         // TODO: verify read_packet returns a noop code
         for conn in self.ring.into_iter() {
-            conn.write_packet(self.compressor, Packet::noop()).await?;
+            conn.write_packet(self.compressor, Packet::noop()?).await?;
             let packet = conn.read_packet(self.compressor).await?;
             packet.error_for_status()?;
         }

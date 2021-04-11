@@ -1,5 +1,8 @@
 use std::convert::TryInto;
 
+use bincode::{DefaultOptions, Options};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
 use super::{
     ProtocolError, Status, ADDQ_OPCODE, ADD_OPCODE, DELETE_OPCODE, GETKQ_OPCODE, GETK_OPCODE,
     GETQ_OPCODE, GET_OPCODE, MAGIC_REQUEST_VALUE, MAGIC_RESPONSE_VALUE, NOOP_OPCODE,
@@ -60,6 +63,19 @@ impl Header {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[repr(C)]
+pub struct SetExtras {
+    pub flags: u32,
+    pub expire: u32,
+}
+
+impl SetExtras {
+    pub fn new(flags: u32, expire: u32) -> Self {
+        Self { flags, expire }
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Packet {
     pub header: Header,
@@ -69,75 +85,105 @@ pub struct Packet {
 }
 
 impl Packet {
-    fn new_request(opcode: u8, key: Vec<u8>, extras: Vec<u8>, value: Vec<u8>) -> Self {
+    fn new_request<K: AsRef<[u8]>, V: Serialize + ?Sized, E: Serialize>(
+        opcode: u8,
+        key: K,
+        extras: &E,
+        value: &V,
+    ) -> bincode::Result<Self> {
+        let config = DefaultOptions::new()
+            .with_big_endian()
+            .with_fixint_encoding();
+
         let mut packet = Packet::default();
+        let key = key.as_ref();
+        let value = bincode::serialize(value)?;
+        let extras = config.serialize(extras)?;
         packet.header.magic = MAGIC_REQUEST_VALUE;
         packet.header.opcode = opcode;
         packet.header.key_length = key.len() as u16;
         packet.header.extras_length = extras.len() as u8;
         packet.header.body_len = (extras.len() + key.len() + value.len()) as u32;
-        packet.key = key;
+        packet.key = key.into();
         packet.extras = extras;
         packet.value = value;
-        packet
+        Ok(packet)
     }
 
-    pub fn get(key: Vec<u8>) -> Self {
-        Packet::new_request(GET_OPCODE, key, vec![], vec![])
+    pub fn get<K: AsRef<[u8]>>(key: K) -> bincode::Result<Self> {
+        Packet::new_request(GET_OPCODE, key, b"", b"")
     }
 
-    pub fn getk(key: Vec<u8>) -> Self {
-        Packet::new_request(GETK_OPCODE, key, vec![], vec![])
+    pub fn getk<K: AsRef<[u8]>>(key: K) -> bincode::Result<Self> {
+        Packet::new_request(GETK_OPCODE, key, b"", b"")
     }
 
-    pub fn getq(key: Vec<u8>) -> Self {
-        Packet::new_request(GETQ_OPCODE, key, vec![], vec![])
+    pub fn getq<K: AsRef<[u8]>>(key: K) -> bincode::Result<Self> {
+        Packet::new_request(GETQ_OPCODE, key, b"", b"")
     }
 
-    pub fn getkq(key: Vec<u8>) -> Self {
-        Packet::new_request(GETKQ_OPCODE, key, vec![], vec![])
+    pub fn getkq<K: AsRef<[u8]>>(key: K) -> bincode::Result<Self> {
+        Packet::new_request(GETKQ_OPCODE, key, b"", b"")
     }
 
-    pub fn set(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
-        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
-        Packet::new_request(SET_OPCODE, key, extras, value)
+    pub fn set<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        key: K,
+        value: &V,
+        extras: SetExtras,
+    ) -> bincode::Result<Self> {
+        Packet::new_request(SET_OPCODE, key, &extras, value)
     }
 
-    pub fn setq(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
-        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
-        Packet::new_request(SETQ_OPCODE, key, extras, value)
+    pub fn setq<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        key: K,
+        value: &V,
+        extras: SetExtras,
+    ) -> bincode::Result<Self> {
+        Packet::new_request(SETQ_OPCODE, key, &extras, value)
     }
 
-    pub fn add(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
-        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
-        Packet::new_request(ADD_OPCODE, key, extras, value)
+    pub fn add<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        key: K,
+        value: &V,
+        extras: SetExtras,
+    ) -> bincode::Result<Self> {
+        Packet::new_request(ADD_OPCODE, key, &extras, value)
     }
 
-    pub fn addq(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
-        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
-        Packet::new_request(ADDQ_OPCODE, key, extras, value)
+    pub fn addq<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        key: K,
+        value: &V,
+        extras: SetExtras,
+    ) -> bincode::Result<Self> {
+        Packet::new_request(ADDQ_OPCODE, key, &extras, value)
     }
 
-    pub fn replace(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
-        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
-        Packet::new_request(REPLACE_OPCODE, key, extras, value)
+    pub fn replace<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        key: K,
+        value: &V,
+        extras: SetExtras,
+    ) -> bincode::Result<Self> {
+        Packet::new_request(REPLACE_OPCODE, key, &extras, value)
     }
 
-    pub fn replaceq(key: Vec<u8>, value: Vec<u8>, expire: u32) -> Self {
-        let extras = [[0, 0, 0, 0], expire.to_be_bytes()].concat();
-        Packet::new_request(REPLACEQ_OPCODE, key, extras, value)
+    pub fn replaceq<K: AsRef<[u8]>, V: Serialize + ?Sized>(
+        key: K,
+        value: &V,
+        extras: SetExtras,
+    ) -> bincode::Result<Self> {
+        Packet::new_request(REPLACEQ_OPCODE, key, &extras, value)
     }
 
-    pub fn delete(key: Vec<u8>) -> Self {
-        Packet::new_request(DELETE_OPCODE, key, vec![], vec![])
+    pub fn delete<K: AsRef<[u8]>>(key: K) -> bincode::Result<Self> {
+        Packet::new_request(DELETE_OPCODE, key, b"", b"")
     }
 
-    pub fn noop() -> Self {
-        Packet::new_request(NOOP_OPCODE, vec![], vec![], vec![])
+    pub fn noop() -> bincode::Result<Self> {
+        Packet::new_request(NOOP_OPCODE, b"", b"", b"")
     }
 
-    pub fn version() -> Self {
-        Packet::new_request(VERSION_OPCODE, vec![], vec![], vec![])
+    pub fn version() -> bincode::Result<Self> {
+        Packet::new_request(VERSION_OPCODE, b"", b"", b"")
     }
 
     pub fn error_for_status(&self) -> Result<(), Status> {
@@ -145,6 +191,10 @@ impl Packet {
             0 => Ok(()),
             it => Err(Status::from(it)),
         }
+    }
+
+    pub fn deserialize_value<V: DeserializeOwned>(&self) -> bincode::Result<V> {
+        bincode::deserialize(&self.value)
     }
 }
 
@@ -170,7 +220,7 @@ impl From<Packet> for Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::Packet;
+    use super::{Packet, SetExtras};
     use crate::protocol::Header;
 
     #[test]
@@ -203,5 +253,14 @@ mod tests {
 
         let actual_packet: Packet = header.read_packet(b"Hello").unwrap();
         assert_eq!(expect_packet, actual_packet);
+    }
+
+    #[test]
+    fn test_extras() {
+        let extras = SetExtras::new(0x00000000, 0xABCD0000);
+        let packet = Packet::set(b"key", b"value", extras).unwrap();
+        let actual = packet.extras;
+        let expect = vec![0, 0, 0, 0, 0xAB, 0xCD, 0x00, 0x00];
+        assert_eq!(expect, actual);
     }
 }

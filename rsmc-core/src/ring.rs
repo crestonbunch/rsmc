@@ -41,13 +41,16 @@ impl<C: Connection> Ring<C> {
     }
 
     /// Get the connection owning the bucket containing the given key.
-    pub fn get_conn(&mut self, key: &[u8]) -> Result<&mut C, Error> {
-        let conn_index = self.find_bucket(key);
+    pub fn get_conn<K: AsRef<[u8]>>(&mut self, key: K) -> Result<&mut C, Error> {
+        let conn_index = self.find_bucket(key.as_ref());
         Ok(&mut self.conns[conn_index])
     }
 
     /// Group multiple keys and the connections that own the keys.
-    pub fn get_conns<'a, 'b>(&'b mut self, keys: Vec<&'a [u8]>) -> Vec<(&'b mut C, Vec<&'a [u8]>)> {
+    pub fn get_conns<'a, 'b, K: AsRef<[u8]> + 'b>(
+        &'a mut self,
+        keys: &'b [K],
+    ) -> Vec<(&'a mut C, Vec<&'b K>)> {
         let pipelines = self.get_pipelines(keys);
         self.into_iter()
             .zip(pipelines)
@@ -55,10 +58,10 @@ impl<C: Connection> Ring<C> {
             .collect()
     }
 
-    fn get_pipelines<'a>(&self, keys: Vec<&'a [u8]>) -> Vec<Vec<&'a [u8]>> {
+    fn get_pipelines<'a, 'b, K: AsRef<[u8]> + 'b>(&'a self, keys: &'b [K]) -> Vec<Vec<&'b K>> {
         let mut out = vec![vec![]; self.conns.len()];
         for key in keys {
-            let conn_index = self.find_bucket(key);
+            let conn_index = self.find_bucket(key.as_ref());
             out[conn_index].push(key);
         }
         out
