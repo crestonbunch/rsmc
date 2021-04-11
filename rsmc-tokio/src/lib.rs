@@ -49,6 +49,7 @@ mod test {
     use flate2::Compression;
     use futures::Future;
     use rand::prelude::*;
+    use rsmc_core::client::Compressor;
     use std::{
         collections::HashMap,
         io::{BufRead, BufReader},
@@ -144,46 +145,64 @@ mod test {
         })
     }
 
+    async fn test_run<P: Compressor>(pool: Pool<P>) {
+        let mut client = pool.get().await.unwrap();
+
+        for (k, v) in &[
+            ("key", "value"),
+            ("hello", "world"),
+            ("abc", "123"),
+            ("dead", "beef"),
+        ] {
+            assert_eq!(None, client.get::<_, String>(k).await.unwrap());
+            assert_eq!(None, client.get::<_, String>(k).await.unwrap());
+            assert_eq!((), client.set(k, v, 1).await.unwrap());
+            let expect = Some(v.to_string());
+            let actual = client.get::<_, String>(k).await.unwrap();
+            assert_eq!(expect, actual);
+
+            assert_eq!((), client.delete(k).await.unwrap());
+            assert_eq!(None, client.get::<_, String>(k).await.unwrap());
+        }
+
+        for map in &[
+            &[("key", "value"), ("hello", "world")],
+            &[("abc", "123"), ("dead", "beef")],
+        ] {
+            let keys = map.iter().map(|(k, _)| k.as_bytes()).collect::<Vec<_>>();
+            let hash_map = map.iter().fold(HashMap::new(), |mut acc, (k, v)| {
+                acc.insert(k.as_bytes(), *v);
+                acc
+            });
+
+            let (result, _) = client.get_multi::<_, String>(&keys).await.unwrap();
+            assert_eq!(0, result.len());
+
+            client.set_multi(hash_map.clone(), 1).await.unwrap();
+
+            let get_keys = [keys.clone(), vec![b"not found"]].concat();
+            let (result, _) = client.get_multi::<_, String>(&get_keys).await.unwrap();
+            assert_eq!(keys.len(), result.len());
+            result.into_iter().for_each(|(k, v)| {
+                let expect = hash_map.get(&k[..]).unwrap();
+                assert_eq!(*expect, v);
+            });
+
+            client.delete_multi(&keys).await.unwrap();
+            let (result, _) = client.get_multi::<_, String>(&keys).await.unwrap();
+            assert_eq!(0, result.len());
+        }
+    }
+
     #[test]
-    fn test_end_to_end() {
+    fn test_single_connection() {
         let mut rng = rand::thread_rng();
         let random_port = rng.gen_range(20000..30000);
         MemcachedTester::new(random_port).run(async {
             let host = format!("127.0.0.1:{}", random_port);
             let cfg = ClientConfig::new_uncompressed(vec![host]);
             let pool = Pool::new(cfg, 16);
-            let mut client = pool.get().await.unwrap();
-
-            assert_eq!(None, client.get(b"key").await.unwrap());
-            assert_eq!(None, client.get(b"key").await.unwrap());
-            assert_eq!((), client.set(b"key", b"hello", 1).await.unwrap());
-            assert_eq!(Some(b"hello".to_vec()), client.get(b"key").await.unwrap());
-
-            assert_eq!((), client.set(b"key", b"world", 1).await.unwrap());
-            assert_eq!(Some(b"world".to_vec()), client.get(b"key").await.unwrap());
-
-            let mut multi_data = HashMap::new();
-            multi_data.insert(b"abc".to_vec(), b"123".to_vec());
-            multi_data.insert(b"def".to_vec(), b"456".to_vec());
-            client.set_multi(multi_data, 1).await.unwrap();
-            let (result, _) = client
-                .get_multi(vec![b"abc", b"def", b"qwop"])
-                .await
-                .unwrap();
-
-            assert_eq!(b"123".to_vec(), result[&b"abc".to_vec()]);
-            assert_eq!(b"456".to_vec(), result[&b"def".to_vec()]);
-            assert_eq!(None, result.get(&b"qwop".to_vec()));
-
-            assert_eq!((), client.delete(b"abc").await.unwrap());
-            assert_eq!(None, client.get(b"abc").await.unwrap());
-            client.delete_multi(vec![b"key", b"def"]).await.unwrap();
-            assert_eq!(None, client.get(b"key").await.unwrap());
-            assert_eq!(None, client.get(b"def").await.unwrap());
-
-            assert_eq!(None, client.get(b"qwop").await.unwrap());
-            assert_eq!((), client.delete(b"qwop").await.unwrap());
-            assert_eq!(None, client.get(b"qwop").await.unwrap());
+            test_run(pool).await;
         });
     }
 
@@ -202,42 +221,7 @@ mod test {
                 ZlibCompressor::new(Compression::default(), 1),
             );
             let pool = Pool::new(cfg, 16);
-            let mut client = pool.get().await.unwrap();
-
-            assert_eq!(None, client.get(b"key").await.unwrap());
-            assert_eq!(None, client.get(b"key").await.unwrap());
-            assert_eq!((), client.set(b"key", b"hello", 1).await.unwrap());
-            assert_eq!(Some(b"hello".to_vec()), client.get(b"key").await.unwrap());
-
-            assert_eq!((), client.set(b"key", b"world", 1).await.unwrap());
-            assert_eq!(Some(b"world".to_vec()), client.get(b"key").await.unwrap());
-
-            let mut multi_data = HashMap::new();
-            multi_data.insert(b"abc".to_vec(), b"123".to_vec());
-            multi_data.insert(b"def".to_vec(), b"456".to_vec());
-            client.set_multi(multi_data, 1).await.unwrap();
-            let (result, _) = client
-                .get_multi(vec![b"abc", b"def", b"qwop"])
-                .await
-                .unwrap();
-
-            assert_eq!(b"123".to_vec(), result[&b"abc".to_vec()]);
-            assert_eq!(b"456".to_vec(), result[&b"def".to_vec()]);
-            assert_eq!(None, result.get(&b"qwop".to_vec()));
-
-            assert_eq!(b"123".to_vec(), result[&b"abc".to_vec()]);
-            assert_eq!(b"456".to_vec(), result[&b"def".to_vec()]);
-            assert_eq!(None, result.get(&b"qwop".to_vec()));
-
-            assert_eq!((), client.delete(b"abc").await.unwrap());
-            assert_eq!(None, client.get(b"abc").await.unwrap());
-            client.delete_multi(vec![b"key", b"def"]).await.unwrap();
-            assert_eq!(None, client.get(b"key").await.unwrap());
-            assert_eq!(None, client.get(b"def").await.unwrap());
-
-            assert_eq!(None, client.get(b"qwop").await.unwrap());
-            assert_eq!((), client.delete(b"qwop").await.unwrap());
-            assert_eq!(None, client.get(b"qwop").await.unwrap());
+            test_run(pool).await;
         });
     }
 }
