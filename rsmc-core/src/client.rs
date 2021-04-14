@@ -129,7 +129,7 @@ impl Compressor for NoCompressor {
 /// A connection is an async interface to memcached, which requires a concrete
 /// implementation using an underlying async runtime (e.g. tokio or async-std.)
 #[async_trait]
-pub trait Connection: Sized + Send + Sync + 'static {
+pub trait Connection: Clone + Sized + Send + Sync + 'static {
     /// Connect to a memcached server over TCP.
     async fn connect(url: String) -> Result<Self, Error>;
 
@@ -194,7 +194,7 @@ impl ClientConfig<NoCompressor> {
 
 /// A client manages connections to every node in a memcached cluster using
 /// consistent hashing to decide which connection to use based on the key.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Client<C: Connection, P: Compressor> {
     ring: Ring<C>,
     compressor: P,

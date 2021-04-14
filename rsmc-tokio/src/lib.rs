@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use rsmc_core::client::{Connection, Error as CoreError};
+use std::{ops::DerefMut, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    sync::Mutex,
 };
 
 pub use rsmc_core::client::ClientConfig;
@@ -23,24 +25,29 @@ pub type Pool<C> = rsmc_core::client::Pool<TokioConnection, C>;
 
 /// A TokioConnection uses the tokio runtime to form TCP connections to
 /// memcached.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokioConnection {
-    stream: TcpStream,
+    stream: Arc<Mutex<TcpStream>>,
 }
 
 #[async_trait]
 impl Connection for TokioConnection {
     async fn connect(url: String) -> Result<Self, CoreError> {
         let stream = TcpStream::connect(url).await?;
+        let stream = Arc::new(Mutex::new(stream));
         Ok(TokioConnection { stream })
     }
 
     async fn read(&mut self, buf: &mut Vec<u8>) -> Result<usize, CoreError> {
-        Ok(self.stream.read(buf).await?)
+        let mut lock = self.stream.lock().await;
+        let stream = lock.deref_mut();
+        Ok(stream.read(buf).await?)
     }
 
     async fn write(&mut self, data: &[u8]) -> Result<(), CoreError> {
-        Ok(self.stream.write_all(data).await?)
+        let mut lock = self.stream.lock().await;
+        let stream = lock.deref_mut();
+        Ok(stream.write_all(data).await?)
     }
 }
 
