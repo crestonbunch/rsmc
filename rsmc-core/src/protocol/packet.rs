@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 
 use bincode::{DefaultOptions, Options};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     ProtocolError, Status, ADDQ_OPCODE, ADD_OPCODE, DELETE_OPCODE, GETKQ_OPCODE, GETK_OPCODE,
@@ -63,7 +63,9 @@ impl Header {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, PartialEq, Clone, Copy, ::serde_derive::Serialize, ::serde_derive::Deserialize,
+)]
 #[repr(C)]
 pub struct SetExtras {
     pub flags: u32,
@@ -253,6 +255,27 @@ mod tests {
 
         let actual_packet: Packet = header.read_packet(b"Hello").unwrap();
         assert_eq!(expect_packet, actual_packet);
+    }
+
+    #[test]
+    fn test_github_add_example() {
+        let packet = Packet::add(b"Hello", b"World", SetExtras::new(0xdeadbeef, 0x1c20)).unwrap();
+        let header = packet.header;
+        let expect_bytes = vec![
+            0x80, 0x02, 0x00, 0x05, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef,
+            0x00, 0x00, 0x1c, 0x20, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x57, 0x6f, 0x72, 0x6c, 0x64,
+        ];
+
+        let packet_bytes: Vec<u8> = packet.clone().into();
+        assert_eq!(expect_bytes, packet_bytes);
+
+        let body: Vec<u8> = vec![
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x1c, 0x20, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x57,
+            0x6f, 0x72, 0x6c, 0x64,
+        ];
+        let actual_packet: Packet = header.read_packet(&body).unwrap();
+        assert_eq!(packet, actual_packet);
     }
 
     #[test]

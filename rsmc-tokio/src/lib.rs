@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rsmc_core::client::{Connection, Error as CoreError};
+use rsmc_core::client::Connection;
 use std::{ops::DerefMut, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -7,7 +7,7 @@ use tokio::{
     sync::Mutex,
 };
 
-pub use rsmc_core::client::ClientConfig;
+pub use rsmc_core::client::{ClientConfig, Compressor, Error, NoCompressor};
 #[cfg(feature = "zlib")]
 pub use rsmc_core::zlib::ZlibCompressor;
 
@@ -19,9 +19,9 @@ pub use rsmc_core::zlib::ZlibCompressor;
 /// use rsmc_tokio::{Pool, ClientConfig};
 ///
 /// let cfg = ClientConfig::new_uncompressed(vec!["localhost:11211".into()]);
-/// let pool = Pool::new(cfg, 16);
+/// let pool = Pool::builder(cfg).max_size(16).build().unwrap();
 /// ```
-pub type Pool<C> = rsmc_core::client::Pool<TokioConnection, C>;
+pub type Pool<P> = rsmc_core::client::Pool<TokioConnection, P>;
 
 /// A TokioConnection uses the tokio runtime to form TCP connections to
 /// memcached.
@@ -32,19 +32,19 @@ pub struct TokioConnection {
 
 #[async_trait]
 impl Connection for TokioConnection {
-    async fn connect(url: String) -> Result<Self, CoreError> {
+    async fn connect(url: String) -> Result<Self, Error> {
         let stream = TcpStream::connect(url).await?;
         let stream = Arc::new(Mutex::new(stream));
         Ok(TokioConnection { stream })
     }
 
-    async fn read(&mut self, buf: &mut Vec<u8>) -> Result<usize, CoreError> {
+    async fn read(&mut self, buf: &mut Vec<u8>) -> Result<usize, Error> {
         let mut lock = self.stream.lock().await;
         let stream = lock.deref_mut();
         Ok(stream.read(buf).await?)
     }
 
-    async fn write(&mut self, data: &[u8]) -> Result<(), CoreError> {
+    async fn write(&mut self, data: &[u8]) -> Result<(), Error> {
         let mut lock = self.stream.lock().await;
         let stream = lock.deref_mut();
         Ok(stream.write_all(data).await?)
@@ -56,7 +56,6 @@ mod test {
     use flate2::Compression;
     use futures::Future;
     use rand::prelude::*;
-    use rsmc_core::client::Compressor;
     use std::{
         collections::HashMap,
         io::{BufRead, BufReader},
@@ -147,6 +146,7 @@ mod test {
         let mut rng = rand::thread_rng();
         let random_port = rng.gen_range(10000..20000);
         MemcachedTester::new(random_port).run(async {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             let host = format!("127.0.0.1:{}", random_port);
             TokioConnection::connect(host).await.unwrap();
         })
@@ -206,9 +206,10 @@ mod test {
         let mut rng = rand::thread_rng();
         let random_port = rng.gen_range(20000..30000);
         MemcachedTester::new(random_port).run(async {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             let host = format!("127.0.0.1:{}", random_port);
             let cfg = ClientConfig::new_uncompressed(vec![host]);
-            let pool = Pool::new(cfg, 16);
+            let pool = Pool::builder(cfg).max_size(16).build().unwrap();
             test_run(pool).await;
         });
     }
@@ -220,6 +221,7 @@ mod test {
         random_ports.shuffle(rng);
         let random_ports: Vec<_> = random_ports[0..3].into();
         MemcachedTester::new_cluster(random_ports.clone()).run(async {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             let cfg = ClientConfig::new(
                 random_ports
                     .into_iter()
@@ -227,7 +229,7 @@ mod test {
                     .collect(),
                 ZlibCompressor::new(Compression::default(), 1),
             );
-            let pool = Pool::new(cfg, 16);
+            let pool = Pool::builder(cfg).max_size(16).build().unwrap();
             test_run(pool).await;
         });
     }

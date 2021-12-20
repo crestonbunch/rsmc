@@ -14,6 +14,7 @@ use std::{
     error::Error as StdError,
     fmt::{Display, Formatter, Result as FmtResult},
     hash::Hash,
+    marker::PhantomData,
 };
 
 /// An error causing during client communication with Memcached.
@@ -168,12 +169,17 @@ pub trait Connection: Clone + Sized + Send + Sync + 'static {
 
 /// Set configuration values for a memcached client.
 #[derive(Debug, Clone)]
-pub struct ClientConfig<P: Compressor> {
+pub struct ClientConfig<C: Connection, P: Compressor> {
     endpoints: Vec<String>,
     compressor: P,
+    phantom: PhantomData<C>,
 }
 
-impl<P: Compressor> ClientConfig<P> {
+impl<C, P> ClientConfig<C, P>
+where
+    C: Connection,
+    P: Compressor,
+{
     /// Create a new client config from the given memcached servers and
     /// compressor. If no compression is desired, then use
     /// [`ClientConfig::new_uncompressed`]
@@ -181,11 +187,15 @@ impl<P: Compressor> ClientConfig<P> {
         Self {
             endpoints,
             compressor,
+            phantom: PhantomData,
         }
     }
 }
 
-impl ClientConfig<NoCompressor> {
+impl<C> ClientConfig<C, NoCompressor>
+where
+    C: Connection,
+{
     /// Create a new client config with no compression.
     pub fn new_uncompressed(endpoints: Vec<String>) -> Self {
         Self::new(endpoints, NoCompressor)
@@ -202,10 +212,11 @@ pub struct Client<C: Connection, P: Compressor> {
 
 impl<C: Connection, P: Compressor> Client<C, P> {
     /// Create a new client using the client config provided.
-    pub async fn new(config: ClientConfig<P>) -> Result<Self, Error> {
+    pub async fn new(config: ClientConfig<C, P>) -> Result<Self, Error> {
         let ClientConfig {
             endpoints,
             compressor,
+            ..
         } = config;
         let ring = Ring::new(endpoints).await?;
         Ok(Self { ring, compressor })
@@ -295,12 +306,11 @@ impl<C: Connection, P: Compressor> Client<C, P> {
     ) -> Result<(), Error> {
         let key = key.as_ref();
         let conn = self.ring.get_conn(key)?;
-        conn.write_packet(
-            self.compressor,
-            Packet::set(key, data, SetExtras::new(0, expire))?,
-        )
-        .await?;
-        conn.read_packet(self.compressor).await?;
+        let packet = Packet::set(key, data, SetExtras::new(0, expire))?;
+        conn.write_packet(self.compressor, packet).await?;
+        conn.read_packet(self.compressor)
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -363,7 +373,9 @@ impl<C: Connection, P: Compressor> Client<C, P> {
         let conn = self.ring.get_conn(key)?;
         conn.write_packet(self.compressor, Packet::delete(key)?)
             .await?;
-        conn.read_packet(self.compressor).await?;
+        conn.read_packet(self.compressor)
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -414,18 +426,21 @@ impl<C: Connection, P: Compressor> Client<C, P> {
 }
 
 #[async_trait]
-impl<C, P> Manager<Client<C, P>, Error> for ClientConfig<P>
+impl<C, P> Manager for ClientConfig<C, P>
 where
     C: Connection,
     P: Compressor,
 {
-    async fn create(&self) -> Result<Client<C, P>, Error> {
+    type Type = Client<C, P>;
+    type Error = Error;
+
+    async fn create(&self) -> Result<Self::Type, Error> {
         let mut client = Client::new(self.clone()).await?;
         client.keep_alive().await?;
         Ok(client)
     }
 
-    async fn recycle(&self, client: &mut Client<C, P>) -> RecycleResult<Error> {
+    async fn recycle(&self, client: &mut Self::Type) -> RecycleResult<Error> {
         client.keep_alive().await?;
         Ok(())
     }
@@ -435,7 +450,7 @@ where
 /// for best performance since it eliminates the overhead of having to
 /// constantly recreate TCP connections, while also balancing the total
 /// number of connections open at a time.
-pub type Pool<C, P> = deadpool::managed::Pool<Client<C, P>, Error>;
+pub type Pool<C, P> = deadpool::managed::Pool<ClientConfig<C, P>>;
 
 #[cfg(test)]
 mod tests {
